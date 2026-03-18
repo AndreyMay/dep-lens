@@ -25,43 +25,43 @@ const log = vscode.window.createOutputChannel("DepLens");
 // ── Decoration types ──
 
 const majorDecType = vscode.window.createTextEditorDecorationType({
-  after: { color: "#4FC1FF", fontStyle: "italic" },
+  after: { color: "#4FC1FF", margin: "0 0 0 1em", fontWeight: "normal; font-size: 0.9em" },
   overviewRulerColor: "#4FC1FF",
   overviewRulerLane: vscode.OverviewRulerLane.Right,
 });
 
 const minorDecType = vscode.window.createTextEditorDecorationType({
-  after: { color: "#FFD700", fontStyle: "italic" },
+  after: { color: "#FFD700", margin: "0 0 0 1em", fontWeight: "normal; font-size: 0.9em" },
   overviewRulerColor: "#FFD700",
   overviewRulerLane: vscode.OverviewRulerLane.Right,
 });
 
 const patchDecType = vscode.window.createTextEditorDecorationType({
-  after: { color: "#89D185", fontStyle: "italic" },
+  after: { color: "#89D185", margin: "0 0 0 1em", fontWeight: "normal; font-size: 0.9em" },
   overviewRulerColor: "#89D185",
   overviewRulerLane: vscode.OverviewRulerLane.Right,
 });
 
 const prereleaseDecType = vscode.window.createTextEditorDecorationType({
-  after: { color: "#FF79C6", fontStyle: "italic" },
+  after: { color: "#FF79C6", margin: "0 0 0 1em", fontWeight: "normal; font-size: 0.9em" },
 });
 
 const loadingDecType = vscode.window.createTextEditorDecorationType({
-  after: { color: "#888888", fontStyle: "italic" },
+  after: { color: "#888888", margin: "0 0 0 1em", fontWeight: "normal; font-size: 0.9em" },
 });
 
 const errorDecType = vscode.window.createTextEditorDecorationType({
-  after: { color: "#FF6B6B", fontStyle: "italic" },
+  after: { color: "#FF6B6B", margin: "0 0 0 1em", fontWeight: "normal; font-size: 0.9em" },
 });
 
 const mismatchDecType = vscode.window.createTextEditorDecorationType({
-  after: { color: "#FFA500", fontStyle: "italic" },
+  after: { color: "#FFA500", margin: "0 0 0 1em", fontWeight: "normal; font-size: 0.9em" },
   overviewRulerColor: "#FFA500",
   overviewRulerLane: vscode.OverviewRulerLane.Right,
 });
 
 const catalogResolvedDecType = vscode.window.createTextEditorDecorationType({
-  after: { color: "#7a9aaa", fontStyle: "italic" },
+  after: { color: "#7a9aaa", margin: "0 0 0 1em", fontWeight: "normal; font-size: 0.9em" },
 });
 
 const ALL_DEC_TYPES = [
@@ -219,7 +219,7 @@ function paintResults(
         decorations.catalogResolved.push({
           range,
           renderOptions: {
-            after: { contentText: `  ${resolved.version}${label}` },
+            after: { contentText: `${resolved.version}${label}` },
           },
         });
       }
@@ -241,7 +241,7 @@ function paintResults(
         range,
         renderOptions: {
           after: {
-            contentText: `  \u26A0 catalog: ${pkgInfo!.catalogVersion}`,
+            contentText: `\u26A0 catalog: ${pkgInfo!.catalogVersion}`,
           },
         },
       });
@@ -253,7 +253,7 @@ function paintResults(
       decorations.error.push({
         range,
         renderOptions: {
-          after: { contentText: `  \u2717 ${errors.get(entry.packageName)}` },
+          after: { contentText: `\u2717 ${errors.get(entry.packageName)}` },
         },
       });
       continue;
@@ -263,7 +263,7 @@ function paintResults(
     if (!data) {
       decorations.loading.push({
         range,
-        renderOptions: { after: { contentText: "  loading..." } },
+        renderOptions: { after: { contentText: "loading..." } },
       });
       continue;
     }
@@ -276,28 +276,28 @@ function paintResults(
     // Build the prerelease suffix shown alongside stable upgrades
     const preSuffix =
       showPre && upgrades.latestPrerelease
-        ? `  \u03B2 ${upgrades.latestPrerelease}`
+        ? ` \u03B2 ${upgrades.latestPrerelease}`
         : "";
 
     if (upgrades.major) {
       decorations.major.push({
         range,
         renderOptions: {
-          after: { contentText: `  \u2191 ${upgrades.major}${preSuffix}` },
+          after: { contentText: `${upgrades.major}${preSuffix}` },
         },
       });
     } else if (upgrades.minor) {
       decorations.minor.push({
         range,
         renderOptions: {
-          after: { contentText: `  \u2191 ${upgrades.minor}${preSuffix}` },
+          after: { contentText: `${upgrades.minor}${preSuffix}` },
         },
       });
     } else if (upgrades.patch) {
       decorations.patch.push({
         range,
         renderOptions: {
-          after: { contentText: `  \u2191 ${upgrades.patch}${preSuffix}` },
+          after: { contentText: `${upgrades.patch}${preSuffix}` },
         },
       });
     } else if (upgrades.prerelease) {
@@ -305,7 +305,7 @@ function paintResults(
       decorations.prerelease.push({
         range,
         renderOptions: {
-          after: { contentText: `  \u2191 ${upgrades.prerelease}` },
+          after: { contentText: `${upgrades.prerelease}` },
         },
       });
     } else if (showPre && upgrades.latestPrerelease) {
@@ -314,7 +314,7 @@ function paintResults(
         range,
         renderOptions: {
           after: {
-            contentText: `  \u03B2 ${upgrades.latestPrerelease}`,
+            contentText: `\u03B2 ${upgrades.latestPrerelease}`,
           },
         },
       });
