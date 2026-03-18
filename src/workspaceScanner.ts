@@ -18,9 +18,17 @@ export interface PackageInfo {
   usages: PackageUsage[];
 }
 
+export interface CatalogEntryLocation {
+  version: string;
+  uri: vscode.Uri;
+  line: number;
+}
+
 // ── State ──
 
 let versionMap = new Map<string, PackageInfo>();
+/** catalogSection -> packageName -> location. "catalog" = default catalog. */
+let catalogLookup = new Map<string, Map<string, CatalogEntryLocation>>();
 let diagnosticCollection: vscode.DiagnosticCollection;
 let scanInProgress = false;
 let scanQueued = false;
@@ -41,6 +49,19 @@ export function initScanner(
 
 export function getPackageInfo(name: string): PackageInfo | undefined {
   return versionMap.get(name);
+}
+
+/**
+ * Resolve a `catalog:` or `catalog:<name>` reference to the actual version.
+ * Returns the version string and its location in the workspace config.
+ */
+export function resolveCatalogRef(
+  packageName: string,
+  catalogRef: string,
+): CatalogEntryLocation | undefined {
+  if (!catalogRef.startsWith("catalog:")) return undefined;
+  const name = catalogRef.slice("catalog:".length).trim() || "catalog";
+  return catalogLookup.get(name)?.get(packageName);
 }
 
 export async function scanWorkspace(): Promise<void> {
@@ -67,6 +88,7 @@ export async function scanWorkspace(): Promise<void> {
 
 async function doScan() {
   const map = new Map<string, PackageInfo>();
+  const lookup = new Map<string, Map<string, CatalogEntryLocation>>();
 
   // 1. Parse pnpm-workspace.yaml catalog(s)
   const yamlFiles = await vscode.workspace.findFiles(
@@ -82,6 +104,15 @@ async function doScan() {
       info.catalogVersion = entry.version;
       info.catalogUri = uri;
       info.catalogLine = entry.line;
+
+      // Store in lookup for catalog: resolution
+      const section = entry.section || "catalog";
+      if (!lookup.has(section)) lookup.set(section, new Map());
+      lookup.get(section)!.set(entry.packageName, {
+        version: entry.version,
+        uri,
+        line: entry.line,
+      });
     }
   }
 
@@ -111,6 +142,7 @@ async function doScan() {
   }
 
   versionMap = map;
+  catalogLookup = lookup;
   updateDiagnostics();
 }
 

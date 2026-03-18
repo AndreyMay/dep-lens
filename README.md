@@ -1,30 +1,47 @@
-# DepLens
+# DepLens — Monorepo Dependency Manager
 
-Inline version upgrades + monorepo version-drift detection for **package.json** and **pnpm-workspace.yaml** catalogs.
+A VS Code / Cursor extension built for **monorepos**. Shows inline version upgrades, resolves `catalog:` references, and detects version drift across all packages in your workspace.
+
+## Why?
+
+In a monorepo with dozens of packages, dependency versions silently drift apart. One package pins `react@^18`, another uses `^19`, a third ignores the catalog entirely. DepLens makes this visible at a glance — and fixable with a single keypress.
 
 ## Features
 
 ### Inline Version Upgrades
 
-Color-coded decorations appear next to each dependency showing the latest available version:
+Color-coded decorations appear next to each dependency:
 
-- **Blue** — major update available
-- **Yellow** — minor update available
-- **Green** — patch update available
-- **Pink** — prerelease update available
+| Indicator | Meaning | Example |
+|-----------|---------|---------|
+| 🔵 `↑ 20.0.0` | Major update available | `react: "^19.0.0"` → `↑ 20.0.0` |
+| 🟡 `↑ 19.3.0` | Minor update available | `react: "^19.0.0"` → `↑ 19.3.0` |
+| 🟢 `↑ 19.0.1` | Patch update available | `react: "^19.0.0"` → `↑ 19.0.1` |
+| 🩷 `↑ 5.0.0-beta.30` | Prerelease update (no stable available) | `next-auth: "5.0.0-beta.25"` → `↑ 5.0.0-beta.30` |
+| 🩷 `β 20.0.0-canary.1` | Latest prerelease (`showPrerelease` on) | `react: "^19.0.0"` → `↑ 19.3.0  β 20.0.0-canary.1` |
+| 🟠 `⚠ catalog: ^19.0.0` | Version differs from pnpm catalog | `react: "^18.2.0"` → `⚠ catalog: ^19.0.0` |
+| ⚪ `^19.0.0` | Resolved `catalog:` reference | `react: "catalog:"` → `^19.0.0` |
+
+When `depLens.showPrerelease` is enabled, the `β` prerelease hint appears alongside stable upgrades. If no stable upgrade exists but a prerelease does, `β` is shown on its own.
 
 Works in both `package.json` and `pnpm-workspace.yaml` catalog entries.
 
-### Monorepo Version-Drift Detection
+### pnpm Catalog Support
 
-Scans all `package.json` files across your workspace and flags inconsistencies:
+- **Resolves `catalog:` references** — shows the actual version inline in `package.json` when a dependency uses `catalog:` or `catalog:<name>`
+- **Go to Definition** — `Ctrl+Click` / `Cmd+Click` on a `catalog:` reference jumps to the definition in `pnpm-workspace.yaml`
+- **Named catalog labels** — named catalog references show the catalog name alongside the resolved version
 
-- **Warning** (yellow squiggly) — version differs from the `pnpm-workspace.yaml` catalog (source of truth)
-- **Hint** (subtle dots) — same package has different versions across workspace packages (no catalog defined)
+### Cross-Package Version-Drift Detection
+
+Scans every `package.json` in your workspace and flags inconsistencies:
+
+- **Warning** — version differs from the `pnpm-workspace.yaml` catalog (source of truth)
+- **Hint** — same package has different versions across workspace packages (no catalog defined)
 
 Mismatches appear in the **Problems** panel with clickable links to the conflicting files.
 
-### Code Actions (Ctrl+. / Cmd+.)
+### Quick Fixes (`Cmd+.` / `Ctrl+.`)
 
 On any dependency line:
 
@@ -35,15 +52,17 @@ On any dependency line:
 - **Allow version mismatch** — mark an intentional discrepancy (adds to workspace settings)
 - **Open on npm** — view the package on npmjs.com
 
-### Update All
+### Bulk Update
 
-Command palette → `DepLens: Update All Dependencies` — bulk upgrade with a level picker (major / minor / patch).
+Command palette → `DepLens: Update All Dependencies` — upgrade every dependency in the current file with a level picker (major / minor / patch).
 
 ## Configuration
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `depLens.showDecorations` | `true` | Show/hide inline version decorations |
+| `depLens.showPrerelease` | `false` | Show latest beta/canary/prerelease version alongside stable upgrades |
+| `depLens.hideOnCursorLine` | `false` | Hide decorations when the cursor is on that line |
 | `depLens.allowedMismatches` | `[]` | Package names whose version mismatches are intentional |
 
 ## Commands
@@ -84,7 +103,7 @@ catalogs:
 }
 ```
 
-Skips non-npm versions (`github:`, `workspace:`, `catalog:`, `file:`, `*`, etc.) automatically.
+Skips non-npm versions (`github:`, `workspace:`, `file:`, `*`, etc.) automatically.
 
 ## License
 

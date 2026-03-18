@@ -11,6 +11,7 @@ async function main() {
     format: "cjs",
     platform: "node",
     target: "node18",
+    mainFields: ["module", "main"],
     sourcemap: !production,
     minify: production,
   });

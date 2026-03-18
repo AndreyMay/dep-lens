@@ -14,8 +14,13 @@ import {
   initScanner,
   scanWorkspace,
   getPackageInfo,
+  resolveCatalogRef,
 } from "./workspaceScanner";
 import { DependencyEntry, NpmPackageData } from "./types";
+
+// ── Output channel for debugging ──
+
+const log = vscode.window.createOutputChannel("DepLens");
 
 // ── Decoration types ──
 
@@ -55,6 +60,10 @@ const mismatchDecType = vscode.window.createTextEditorDecorationType({
   overviewRulerLane: vscode.OverviewRulerLane.Right,
 });
 
+const catalogResolvedDecType = vscode.window.createTextEditorDecorationType({
+  after: { color: "#7a9aaa", fontStyle: "italic" },
+});
+
 const ALL_DEC_TYPES = [
   majorDecType,
   minorDecType,
@@ -63,6 +72,7 @@ const ALL_DEC_TYPES = [
   loadingDecType,
   errorDecType,
   mismatchDecType,
+  catalogResolvedDecType,
 ];
 
 // ── State ──
@@ -70,20 +80,24 @@ const ALL_DEC_TYPES = [
 let currentPaintVersion = 0;
 let decorationsEnabled = true;
 
+/** Cached paint state for lightweight repaint on selection change. */
+let lastPaintState:
+  | {
+      editor: vscode.TextEditor;
+      entries: DependencyEntry[];
+      results: Map<string, NpmPackageData>;
+      errors: Map<string, string>;
+    }
+  | undefined;
+
 // ── File type detection ──
 
 function isPnpmWorkspaceYaml(document: vscode.TextDocument): boolean {
-  return (
-    document.languageId === "yaml" &&
-    path.basename(document.fileName) === "pnpm-workspace.yaml"
-  );
+  return path.basename(document.fileName) === "pnpm-workspace.yaml";
 }
 
 function isPackageJson(document: vscode.TextDocument): boolean {
-  return (
-    (document.languageId === "json" || document.languageId === "jsonc") &&
-    path.basename(document.fileName) === "package.json"
-  );
+  return path.basename(document.fileName) === "package.json";
 }
 
 function isSupportedFile(document: vscode.TextDocument): boolean {
@@ -159,7 +173,11 @@ function paintResults(
   entries: DependencyEntry[],
   results: Map<string, NpmPackageData>,
   errors: Map<string, string>,
+  cursorLine?: number,
 ) {
+  // Cache state for lightweight repaint on selection change
+  lastPaintState = { editor, entries, results, errors };
+
   const decorations = {
     major: [] as vscode.DecorationOptions[],
     minor: [] as vscode.DecorationOptions[],
@@ -168,6 +186,7 @@ function paintResults(
     loading: [] as vscode.DecorationOptions[],
     error: [] as vscode.DecorationOptions[],
     mismatch: [] as vscode.DecorationOptions[],
+    catalogResolved: [] as vscode.DecorationOptions[],
   };
 
   const isJson = isPackageJson(editor.document);
@@ -178,8 +197,10 @@ function paintResults(
   );
 
   for (const entry of entries) {
-    if (!isLookupableVersion(entry.version)) continue;
     if (entry.line >= editor.document.lineCount) continue;
+
+    // Selection-aware: skip decorations on the cursor line
+    if (cursorLine !== undefined && entry.line === cursorLine) continue;
 
     const lineLength = editor.document.lineAt(entry.line).text.length;
     const range = new vscode.Range(
@@ -188,6 +209,24 @@ function paintResults(
       entry.line,
       lineLength,
     );
+
+    // ── Feature 1: Resolve catalog: references in package.json ──
+    if (isJson && entry.version.startsWith("catalog:")) {
+      const resolved = resolveCatalogRef(entry.packageName, entry.version);
+      if (resolved) {
+        const catalogName = entry.version.slice("catalog:".length).trim();
+        const label = catalogName ? ` (${catalogName})` : "";
+        decorations.catalogResolved.push({
+          range,
+          renderOptions: {
+            after: { contentText: `  ${resolved.version}${label}` },
+          },
+        });
+      }
+      continue;
+    }
+
+    if (!isLookupableVersion(entry.version)) continue;
 
     // Check for catalog mismatch (only in package.json files, skip allowed)
     const pkgInfo = isJson ? getPackageInfo(entry.packageName) : undefined;
@@ -230,33 +269,53 @@ function paintResults(
     }
 
     const upgrades = computeUpgrades(entry.version, data);
+    const showPre = vscode.workspace
+      .getConfiguration("depLens")
+      .get("showPrerelease", false);
+
+    // Build the prerelease suffix shown alongside stable upgrades
+    const preSuffix =
+      showPre && upgrades.latestPrerelease
+        ? `  \u03B2 ${upgrades.latestPrerelease}`
+        : "";
 
     if (upgrades.major) {
       decorations.major.push({
         range,
         renderOptions: {
-          after: { contentText: `  \u2191 ${upgrades.major}` },
+          after: { contentText: `  \u2191 ${upgrades.major}${preSuffix}` },
         },
       });
     } else if (upgrades.minor) {
       decorations.minor.push({
         range,
         renderOptions: {
-          after: { contentText: `  \u2191 ${upgrades.minor}` },
+          after: { contentText: `  \u2191 ${upgrades.minor}${preSuffix}` },
         },
       });
     } else if (upgrades.patch) {
       decorations.patch.push({
         range,
         renderOptions: {
-          after: { contentText: `  \u2191 ${upgrades.patch}` },
+          after: { contentText: `  \u2191 ${upgrades.patch}${preSuffix}` },
         },
       });
     } else if (upgrades.prerelease) {
+      // No stable upgrade — show prerelease as the primary hint
       decorations.prerelease.push({
         range,
         renderOptions: {
           after: { contentText: `  \u2191 ${upgrades.prerelease}` },
+        },
+      });
+    } else if (showPre && upgrades.latestPrerelease) {
+      // Up to date on stable, but a prerelease exists
+      decorations.prerelease.push({
+        range,
+        renderOptions: {
+          after: {
+            contentText: `  \u03B2 ${upgrades.latestPrerelease}`,
+          },
         },
       });
     }
@@ -269,11 +328,15 @@ function paintResults(
   editor.setDecorations(loadingDecType, decorations.loading);
   editor.setDecorations(errorDecType, decorations.error);
   editor.setDecorations(mismatchDecType, decorations.mismatch);
+  editor.setDecorations(catalogResolvedDecType, decorations.catalogResolved);
 }
 
 // ── Core update loop ──
 
 async function updateDecorations(editor: vscode.TextEditor) {
+  const fileName = path.basename(editor.document.fileName);
+  log.appendLine(`[DepLens] updateDecorations: ${fileName} (lang=${editor.document.languageId}, supported=${isSupportedFile(editor.document)}, enabled=${decorationsEnabled})`);
+
   if (!decorationsEnabled || !isSupportedFile(editor.document)) {
     clearAllDecorations(editor);
     return;
@@ -281,8 +344,10 @@ async function updateDecorations(editor: vscode.TextEditor) {
 
   const entries = parseEntries(editor.document);
   const lookupable = entries.filter((e) => isLookupableVersion(e.version));
+  const hasCatalogRefs = entries.some((e) => e.version.startsWith("catalog:"));
+  log.appendLine(`[DepLens]   entries=${entries.length}, lookupable=${lookupable.length}, catalogRefs=${hasCatalogRefs}`);
 
-  if (lookupable.length === 0) {
+  if (lookupable.length === 0 && !hasCatalogRefs) {
     clearAllDecorations(editor);
     return;
   }
@@ -563,9 +628,34 @@ class DependencyCodeActionProvider implements vscode.CodeActionProvider {
   }
 }
 
+// ── Definition Provider (Ctrl+Click on catalog: refs) ──
+
+class CatalogDefinitionProvider implements vscode.DefinitionProvider {
+  provideDefinition(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+  ): vscode.Definition | undefined {
+    if (!isPackageJson(document)) return;
+
+    const entries = parseEntries(document);
+    const entry = entries.find((e) => e.line === position.line);
+    if (!entry || !entry.version.startsWith("catalog:")) return;
+
+    const resolved = resolveCatalogRef(entry.packageName, entry.version);
+    if (!resolved) return;
+
+    return new vscode.Location(
+      resolved.uri,
+      new vscode.Range(resolved.line, 0, resolved.line, 1000),
+    );
+  }
+}
+
 // ── Activation ──
 
 export function activate(context: vscode.ExtensionContext) {
+  log.appendLine("[DepLens] Extension activated");
+
   const config = vscode.workspace.getConfiguration("depLens");
   decorationsEnabled = config.get("showDecorations", true);
 
@@ -781,6 +871,41 @@ export function activate(context: vscode.ExtensionContext) {
       new DependencyCodeActionProvider(),
       { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
     ),
+  );
+
+  // Definition provider — Ctrl+Click on catalog: refs jumps to catalog
+  context.subscriptions.push(
+    vscode.languages.registerDefinitionProvider(
+      { scheme: "file", pattern: "**/package.json" },
+      new CatalogDefinitionProvider(),
+    ),
+  );
+
+  // Selection-aware decoration hiding — repaint when cursor moves
+  const debouncedSelectionRepaint = debounce(
+    (e: vscode.TextEditorSelectionChangeEvent) => {
+      const hideOnCursor = vscode.workspace
+        .getConfiguration("depLens")
+        .get("hideOnCursorLine", false);
+      if (
+        hideOnCursor &&
+        lastPaintState &&
+        lastPaintState.editor === e.textEditor &&
+        isSupportedFile(e.textEditor.document)
+      ) {
+        paintResults(
+          lastPaintState.editor,
+          lastPaintState.entries,
+          lastPaintState.results,
+          lastPaintState.errors,
+          e.selections[0]?.active.line,
+        );
+      }
+    },
+    50,
+  );
+  context.subscriptions.push(
+    vscode.window.onDidChangeTextEditorSelection(debouncedSelectionRepaint),
   );
 
   // Initial update for the active editor

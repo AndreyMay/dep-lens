@@ -201,7 +201,7 @@ export function computeUpgrades(
     if (result.major && result.minor && result.patch) break;
   }
 
-  // For prerelease current versions: also check for newer prereleases
+  // For prerelease current versions with no stable upgrade: find newer prereleases
   if (
     current.prerelease.length > 0 &&
     !result.major &&
@@ -227,6 +227,19 @@ export function computeUpgrades(
         else result.patch = latest.format();
       }
     }
+  }
+
+  // Always find the latest prerelease newer than current (for optional display)
+  const latestPre = Object.keys(npmData.versions || {})
+    .map((v) => semver.parse(v))
+    .filter(
+      (v): v is semver.SemVer =>
+        v !== null && v.prerelease.length > 0 && semver.gt(v, current),
+    )
+    .sort(semver.rcompare);
+
+  if (latestPre.length > 0) {
+    result.latestPrerelease = latestPre[0].format();
   }
 
   return result;

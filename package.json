@@ -1,7 +1,7 @@
 {
   "name": "dep-lens",
-  "displayName": "DepLens",
-  "description": "Inline version upgrades + monorepo version-drift detection for package.json and pnpm-workspace.yaml catalogs",
+  "displayName": "DepLens — Monorepo Dependency Manager",
+  "description": "Inline version upgrades, pnpm catalog support, and cross-package version-drift detection for monorepos",
   "version": "0.1.0",
   "publisher": "andreymay",
   "license": "MIT",
@@ -27,6 +27,8 @@
     "npm"
   ],
   "activationEvents": [
+    "workspaceContains:pnpm-workspace.yaml",
+    "workspaceContains:package.json",
     "onLanguage:yaml",
     "onLanguage:json",
     "onLanguage:jsonc"
@@ -54,6 +56,16 @@
           "type": "boolean",
           "default": true,
           "description": "Show version upgrade decorations in package.json and pnpm-workspace.yaml"
+        },
+        "depLens.showPrerelease": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show latest beta/canary/prerelease version alongside stable upgrades"
+        },
+        "depLens.hideOnCursorLine": {
+          "type": "boolean",
+          "default": false,
+          "description": "Hide inline decorations when the cursor is on that line"
         },
         "depLens.allowedMismatches": {
           "type": "array",

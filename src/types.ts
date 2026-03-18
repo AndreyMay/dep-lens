@@ -11,6 +11,8 @@ export interface UpgradeInfo {
   minor?: string;
   patch?: string;
   prerelease?: string;
+  /** Latest prerelease/beta/canary version (shown alongside stable when enabled) */
+  latestPrerelease?: string;
 }
 
 export interface NpmPackageData {
