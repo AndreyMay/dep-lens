@@ -1,0 +1,88 @@
+{
+  "name": "dep-lens",
+  "displayName": "DepLens",
+  "description": "Inline version upgrades + monorepo version-drift detection for package.json and pnpm-workspace.yaml catalogs",
+  "version": "0.1.0",
+  "publisher": "andreymay",
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AndreyMay/dep-lens"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "pnpm",
+    "catalog",
+    "dependencies",
+    "upgrade",
+    "monorepo",
+    "version",
+    "npm"
+  ],
+  "activationEvents": [
+    "onLanguage:yaml",
+    "onLanguage:json",
+    "onLanguage:jsonc"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "depLens.updateAll",
+        "title": "DepLens: Update All Dependencies"
+      },
+      {
+        "command": "depLens.toggle",
+        "title": "DepLens: Toggle Decorations"
+      },
+      {
+        "command": "depLens.refresh",
+        "title": "DepLens: Refresh Version Data"
+      }
+    ],
+    "configuration": {
+      "title": "DepLens",
+      "properties": {
+        "depLens.showDecorations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show version upgrade decorations in package.json and pnpm-workspace.yaml"
+        },
+        "depLens.allowedMismatches": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Package names whose version mismatches should not be flagged. Use the code action **\"Allow version mismatch\"** to add entries, or edit manually."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "build:prod": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1",
+    "semver": "^7.6.0",
+    "yaml": "^2.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.37",
+    "@types/semver": "^7.5.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.26.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  }
+}
