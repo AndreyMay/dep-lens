@@ -57,6 +57,11 @@
           "default": true,
           "description": "Show version upgrade decorations in package.json and pnpm-workspace.yaml"
         },
+        "depLens.showUsageCount": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show how many workspace packages use each catalog dependency (in pnpm-workspace.yaml)"
+        },
         "depLens.showPrerelease": {
           "type": "boolean",
           "default": false,
@@ -66,6 +71,27 @@
           "type": "boolean",
           "default": false,
           "description": "Hide inline decorations when the cursor is on that line"
+        },
+        "depLens.excludePaths": {
+          "type": "array",
+          "default": [
+            "**/node_modules/**",
+            "**/.next/**",
+            "**/.open-next/**",
+            "**/.turbo/**",
+            "**/.vercel/**",
+            "**/.sst/**",
+            "**/.sst*/**",
+            "**/dist/**",
+            "**/build/**",
+            "**/out/**",
+            "**/.cache/**",
+            "**/coverage/**"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Glob patterns for paths to exclude when scanning package.json files"
         },
         "depLens.allowedMismatches": {
           "type": "array",

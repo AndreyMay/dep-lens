@@ -1,10 +1,10 @@
 # DepLens — Monorepo Dependency Manager
 
-A VS Code / Cursor extension built for **monorepos**. Shows inline version upgrades, resolves `catalog:` references, and detects version drift across all packages in your workspace.
+A VS Code / Cursor extension built for **monorepos**. Shows inline version upgrades, resolves `catalog:` references, detects version drift across packages, and tracks which packages use each dependency.
 
 ## Why?
 
-In a monorepo with dozens of packages, dependency versions silently drift apart. One package pins `react@^18`, another uses `^19`, a third ignores the catalog entirely. DepLens makes this visible at a glance — and fixable with a single keypress.
+In a monorepo with dozens of packages, dependency versions silently drift apart. One package pins `react@^18`, another uses `^19`, a third ignores the catalog entirely. DepLens makes this visible at a glance — and fixable with a single click.
 
 ## Features
 
@@ -14,17 +14,31 @@ Color-coded decorations appear next to each dependency:
 
 | Indicator | Meaning | Example |
 |-----------|---------|---------|
-| 🔵 `↑ 20.0.0` | Major update available | `react: "^19.0.0"` → `↑ 20.0.0` |
-| 🟡 `↑ 19.3.0` | Minor update available | `react: "^19.0.0"` → `↑ 19.3.0` |
-| 🟢 `↑ 19.0.1` | Patch update available | `react: "^19.0.0"` → `↑ 19.0.1` |
-| 🩷 `↑ 5.0.0-beta.30` | Prerelease update (no stable available) | `next-auth: "5.0.0-beta.25"` → `↑ 5.0.0-beta.30` |
-| 🩷 `β 20.0.0-canary.1` | Latest prerelease (`showPrerelease` on) | `react: "^19.0.0"` → `↑ 19.3.0  β 20.0.0-canary.1` |
+| 🔵 `20.0.0` | Major update available | `react: "^19.0.0"` → `20.0.0` |
+| 🟡 `19.3.0` | Minor update available | `react: "^19.0.0"` → `19.3.0` |
+| 🟢 `19.0.1` | Patch update available | `react: "^19.0.0"` → `19.0.1` |
+| 🩷 `5.0.0-beta.30` | Prerelease update (no stable available) | `next-auth: "5.0.0-beta.25"` → `5.0.0-beta.30` |
+| 🩷 `β 20.0.0-canary.1` | Latest prerelease (`showPrerelease` on) | `react: "^19.0.0"` → `19.3.0 β 20.0.0-canary.1` |
 | 🟠 `⚠ catalog: ^19.0.0` | Version differs from pnpm catalog | `react: "^18.2.0"` → `⚠ catalog: ^19.0.0` |
 | ⚪ `^19.0.0` | Resolved `catalog:` reference | `react: "catalog:"` → `^19.0.0` |
-
-When `depLens.showPrerelease` is enabled, the `β` prerelease hint appears alongside stable upgrades. If no stable upgrade exists but a prerelease does, `β` is shown on its own.
+| ⚫ `3 pkgs` | Package usage count (catalog yaml) | `react: "^19.0.0"` → `19.3.0 3 pkgs` |
+| ⚫ `+2 pkgs` | Also used by N other packages (package.json) | `react: "catalog:"` → `^19.0.0 +2 pkgs` |
+| ⚫ `unused` | No package.json references this entry | `old-lib: "^1.0.0"` → `unused` |
 
 Works in both `package.json` and `pnpm-workspace.yaml` catalog entries.
+
+### Hover Details
+
+Hover any dependency line to see rich information:
+
+**In `pnpm-workspace.yaml`:**
+- **Which packages use it** — lists every `package.json` that references the dependency, showing whether it uses `catalog:` or a hardcoded version (with a ⚠ badge if it differs from the catalog)
+- **Available upgrades** — patch, minor, latest stable, and prerelease versions, each as a **clickable link** that applies the upgrade directly
+
+**In `package.json`:**
+- **Catalog version** — shows what the catalog defines (if applicable)
+- **Also used by** — lists other packages in the workspace that use the same dependency
+- **Available upgrades** — clickable upgrade links (only for direct versions, not `catalog:` refs)
 
 ### pnpm Catalog Support
 
@@ -61,9 +75,13 @@ Command palette → `DepLens: Update All Dependencies` — upgrade every depende
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `depLens.showDecorations` | `true` | Show/hide inline version decorations |
+| `depLens.showUsageCount` | `true` | Show how many workspace packages use each catalog dependency |
 | `depLens.showPrerelease` | `false` | Show latest beta/canary/prerelease version alongside stable upgrades |
 | `depLens.hideOnCursorLine` | `false` | Hide decorations when the cursor is on that line |
+| `depLens.excludePaths` | *(see below)* | Glob patterns for paths to exclude when scanning package.json files |
 | `depLens.allowedMismatches` | `[]` | Package names whose version mismatches are intentional |
+
+Default `excludePaths`: `node_modules`, `.next`, `.open-next`, `.turbo`, `.vercel`, `.sst*`, `dist`, `build`, `out`, `.cache`, `coverage`
 
 ## Commands
 
@@ -79,6 +97,7 @@ Command palette → `DepLens: Update All Dependencies` — upgrade every depende
 - **Caching** — 2-hour in-memory cache, 15-concurrent request limit
 - **Progressive loading** — cached results render instantly, uncached packages load in the background
 - **Workspace scanning** — runs on activation and whenever a `package.json` or `pnpm-workspace.yaml` is saved
+- **Excluded paths** — configurable via `depLens.excludePaths` (defaults exclude `node_modules`, `.next`, `.open-next`, `.turbo`, `.vercel`, `.sst*`, `dist`, `build`, `out`, `.cache`, `coverage`)
 
 ## Supported Formats
 

@@ -1,6 +1,7 @@
 import { parseDocument, isMap, isScalar, isPair } from "yaml";
 import type { YAMLMap } from "yaml";
 import { DependencyEntry } from "./types";
+import { offsetToLine } from "./util";
 
 export function parseCatalogEntries(text: string): DependencyEntry[] {
   const entries: DependencyEntry[] = [];
@@ -59,12 +60,4 @@ function extractEntries(
     const line = offsetToLine(text, range[0]);
     entries.push({ packageName, version, line, section });
   }
-}
-
-function offsetToLine(text: string, offset: number): number {
-  let line = 0;
-  for (let i = 0; i < offset && i < text.length; i++) {
-    if (text[i] === "\n") line++;
-  }
-  return line;
 }

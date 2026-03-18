@@ -172,17 +172,18 @@ export function computeUpgrades(
   const current = parseCurrentVersion(currentRange);
   if (!current) return {};
 
-  const allVersions = Object.keys(npmData.versions || {})
+  // Single pass: parse all versions once, partition into stable and prerelease
+  const allParsed = Object.keys(npmData.versions || {})
     .map((v) => semver.parse(v))
-    .filter(
-      (v): v is semver.SemVer =>
-        v !== null && v.prerelease.length === 0 && semver.gt(v, current),
-    )
+    .filter((v): v is semver.SemVer => v !== null && semver.gt(v, current));
+
+  const stable = allParsed
+    .filter((v) => v.prerelease.length === 0)
     .sort(semver.rcompare);
 
   const result: UpgradeInfo = {};
 
-  for (const v of allVersions) {
+  for (const v of stable) {
     if (v.major !== current.major && !result.major) {
       result.major = v.format();
     } else if (
@@ -201,45 +202,30 @@ export function computeUpgrades(
     if (result.major && result.minor && result.patch) break;
   }
 
-  // For prerelease current versions with no stable upgrade: find newer prereleases
+  // For prerelease current versions with no stable upgrade: check all newer versions
   if (
     current.prerelease.length > 0 &&
     !result.major &&
     !result.minor &&
-    !result.patch
+    !result.patch &&
+    allParsed.length > 0
   ) {
-    const prereleaseVersions = Object.keys(npmData.versions || {})
-      .map((v) => semver.parse(v))
-      .filter(
-        (v): v is semver.SemVer => v !== null && semver.gt(v, current),
-      )
-      .sort(semver.rcompare);
-
-    if (prereleaseVersions.length > 0) {
-      const latest = prereleaseVersions[0];
-      if (latest.prerelease.length > 0) {
-        result.prerelease = latest.format();
-      } else {
-        // It's a stable release newer than our prerelease
-        if (latest.major !== current.major) result.major = latest.format();
-        else if (latest.minor !== current.minor)
-          result.minor = latest.format();
-        else result.patch = latest.format();
-      }
+    const latest = allParsed.sort(semver.rcompare)[0];
+    if (latest.prerelease.length > 0) {
+      result.prerelease = latest.format();
+    } else {
+      if (latest.major !== current.major) result.major = latest.format();
+      else if (latest.minor !== current.minor) result.minor = latest.format();
+      else result.patch = latest.format();
     }
   }
 
-  // Always find the latest prerelease newer than current (for optional display)
-  const latestPre = Object.keys(npmData.versions || {})
-    .map((v) => semver.parse(v))
-    .filter(
-      (v): v is semver.SemVer =>
-        v !== null && v.prerelease.length > 0 && semver.gt(v, current),
-    )
+  // Latest prerelease newer than current (for optional β display)
+  const preOnly = allParsed
+    .filter((v) => v.prerelease.length > 0)
     .sort(semver.rcompare);
-
-  if (latestPre.length > 0) {
-    result.latestPrerelease = latestPre[0].format();
+  if (preOnly.length > 0) {
+    result.latestPrerelease = preOnly[0].format();
   }
 
   return result;

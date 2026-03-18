@@ -11,11 +11,20 @@ export interface PackageUsage {
   line: number;
 }
 
+export interface CatalogUsage {
+  fileUri: vscode.Uri;
+  line: number;
+  /** The raw value, e.g. "catalog:" or "catalog:react17" */
+  ref: string;
+}
+
 export interface PackageInfo {
   catalogVersion?: string;
   catalogUri?: vscode.Uri;
   catalogLine?: number;
   usages: PackageUsage[];
+  /** package.json files that reference this package via catalog: protocol */
+  catalogUsages: CatalogUsage[];
 }
 
 export interface CatalogEntryLocation {
@@ -32,6 +41,7 @@ let catalogLookup = new Map<string, Map<string, CatalogEntryLocation>>();
 let diagnosticCollection: vscode.DiagnosticCollection;
 let scanInProgress = false;
 let scanQueued = false;
+let scanCompleted = false;
 let onScanComplete: (() => void) | undefined;
 
 // ── Public API ──
@@ -41,14 +51,44 @@ export function initScanner(
   onComplete?: () => void,
 ) {
   diagnosticCollection = vscode.languages.createDiagnosticCollection(
-    "packageVersionUpgrade",
+    "depLens",
   );
   context.subscriptions.push(diagnosticCollection);
   onScanComplete = onComplete;
 }
 
+export function isScanComplete(): boolean {
+  return scanCompleted;
+}
+
 export function getPackageInfo(name: string): PackageInfo | undefined {
   return versionMap.get(name);
+}
+
+/**
+ * Total number of package.json files that use this package
+ * (both catalog: refs and direct version references).
+ */
+export function getUsageCount(packageName: string): number {
+  const info = versionMap.get(packageName);
+  if (!info) return 0;
+  return info.catalogUsages.length + info.usages.length;
+}
+
+/**
+ * Number of package.json files that use this package, excluding the given file.
+ */
+export function getOtherUsageCount(
+  packageName: string,
+  excludeUri: string,
+): number {
+  const info = versionMap.get(packageName);
+  if (!info) return 0;
+  return (
+    info.catalogUsages.filter((u) => u.fileUri.toString() !== excludeUri)
+      .length +
+    info.usages.filter((u) => u.fileUri.toString() !== excludeUri).length
+  );
 }
 
 /**
@@ -72,6 +112,7 @@ export async function scanWorkspace(): Promise<void> {
   scanInProgress = true;
   try {
     await doScan();
+    scanCompleted = true;
     onScanComplete?.();
   } catch (err) {
     console.error("[dep-lens] scan failed:", err);
@@ -117,19 +158,44 @@ async function doScan() {
   }
 
   // 2. Parse all package.json files
+  const excludePaths = vscode.workspace
+    .getConfiguration("depLens")
+    .get<string[]>("excludePaths", [
+      "**/node_modules/**",
+      "**/.next/**",
+      "**/.open-next/**",
+      "**/.turbo/**",
+      "**/.vercel/**",
+      "**/.sst/**",
+      "**/.sst*/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/out/**",
+      "**/.cache/**",
+      "**/coverage/**",
+    ]);
+  const excludeGlob =
+    excludePaths.length > 1
+      ? `{${excludePaths.join(",")}}`
+      : excludePaths[0] || undefined;
   const jsonFiles = await vscode.workspace.findFiles(
     "**/package.json",
-    "{**/node_modules/**,**/.next/**,**/dist/**,**/build/**,**/out/**}",
+    excludeGlob,
   );
   for (const uri of jsonFiles) {
     const text = await readFile(uri);
     for (const entry of parsePackageJsonEntries(text)) {
-      // catalog: and workspace: are consistent by definition — skip
-      if (
-        entry.version.startsWith("catalog:") ||
-        entry.version.startsWith("workspace:")
-      )
+      // Track catalog: references for usage counting
+      if (entry.version.startsWith("catalog:")) {
+        const info = getOrCreate(map, entry.packageName);
+        info.catalogUsages.push({
+          fileUri: uri,
+          line: entry.line,
+          ref: entry.version,
+        });
         continue;
+      }
+      if (entry.version.startsWith("workspace:")) continue;
       if (!isLookupableVersion(entry.version)) continue;
 
       const info = getOrCreate(map, entry.packageName);
@@ -263,7 +329,7 @@ function getOrCreate(
 ): PackageInfo {
   let info = map.get(name);
   if (!info) {
-    info = { usages: [] };
+    info = { usages: [], catalogUsages: [] };
     map.set(name, info);
   }
   return info;
@@ -280,7 +346,9 @@ function pushDiag(
   map.set(key, arr);
 }
 
+const decoder = new TextDecoder();
+
 async function readFile(uri: vscode.Uri): Promise<string> {
   const bytes = await vscode.workspace.fs.readFile(uri);
-  return Buffer.from(bytes).toString("utf8");
+  return decoder.decode(bytes);
 }

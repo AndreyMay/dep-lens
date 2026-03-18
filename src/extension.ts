@@ -14,6 +14,9 @@ import {
   initScanner,
   scanWorkspace,
   getPackageInfo,
+  getUsageCount,
+  getOtherUsageCount,
+  isScanComplete,
   resolveCatalogRef,
 } from "./workspaceScanner";
 import { DependencyEntry, NpmPackageData } from "./types";
@@ -64,6 +67,10 @@ const catalogResolvedDecType = vscode.window.createTextEditorDecorationType({
   after: { color: "#7a9aaa", margin: "0 0 0 1em", fontWeight: "normal; font-size: 0.9em" },
 });
 
+const usageCountDecType = vscode.window.createTextEditorDecorationType({
+  after: { color: "#666666", margin: "0 0 0 0.6em", fontWeight: "normal; font-size: 0.85em" },
+});
+
 const ALL_DEC_TYPES = [
   majorDecType,
   minorDecType,
@@ -73,12 +80,14 @@ const ALL_DEC_TYPES = [
   errorDecType,
   mismatchDecType,
   catalogResolvedDecType,
+  usageCountDecType,
 ];
 
 // ── State ──
 
 let currentPaintVersion = 0;
 let decorationsEnabled = true;
+const fetchLimit = pLimit(15);
 
 /** Cached paint state for lightweight repaint on selection change. */
 let lastPaintState:
@@ -104,11 +113,22 @@ function isSupportedFile(document: vscode.TextDocument): boolean {
   return isPnpmWorkspaceYaml(document) || isPackageJson(document);
 }
 
+/** Memoized parse — avoids re-parsing on every hover/code-action if document hasn't changed. */
+let parseCache: { uri: string; version: number; entries: DependencyEntry[] } | undefined;
+
 function parseEntries(document: vscode.TextDocument): DependencyEntry[] {
+  const uri = document.uri.toString();
+  const version = document.version;
+  if (parseCache?.uri === uri && parseCache.version === version) {
+    return parseCache.entries;
+  }
   const text = document.getText();
-  if (isPnpmWorkspaceYaml(document)) return parseCatalogEntries(text);
-  if (isPackageJson(document)) return parsePackageJsonEntries(text);
-  return [];
+  let entries: DependencyEntry[];
+  if (isPnpmWorkspaceYaml(document)) entries = parseCatalogEntries(text);
+  else if (isPackageJson(document)) entries = parsePackageJsonEntries(text);
+  else entries = [];
+  parseCache = { uri, version, entries };
+  return entries;
 }
 
 // ── Helpers ──
@@ -187,14 +207,16 @@ function paintResults(
     error: [] as vscode.DecorationOptions[],
     mismatch: [] as vscode.DecorationOptions[],
     catalogResolved: [] as vscode.DecorationOptions[],
+    usageCount: [] as vscode.DecorationOptions[],
   };
 
   const isJson = isPackageJson(editor.document);
-  const allowed = new Set(
-    vscode.workspace
-      .getConfiguration("depLens")
-      .get<string[]>("allowedMismatches", []),
-  );
+  const currentFileUri = editor.document.uri.toString();
+  const config = vscode.workspace.getConfiguration("depLens");
+  const allowed = new Set(config.get<string[]>("allowedMismatches", []));
+  const showUsage = config.get("showUsageCount", true);
+  const showPre = config.get("showPrerelease", false);
+  const scanDone = isScanComplete();
 
   for (const entry of entries) {
     if (entry.line >= editor.document.lineCount) continue;
@@ -222,6 +244,20 @@ function paintResults(
             after: { contentText: `${resolved.version}${label}` },
           },
         });
+      }
+      // Also show usage count for catalog: refs
+      if (showUsage && scanDone) {
+        const otherCount = getOtherUsageCount(entry.packageName, currentFileUri);
+        if (otherCount > 0) {
+          decorations.usageCount.push({
+            range,
+            renderOptions: {
+              after: {
+                contentText: `+${otherCount} pkg${otherCount !== 1 ? "s" : ""}`,
+              },
+            },
+          });
+        }
       }
       continue;
     }
@@ -269,15 +305,39 @@ function paintResults(
     }
 
     const upgrades = computeUpgrades(entry.version, data);
-    const showPre = vscode.workspace
-      .getConfiguration("depLens")
-      .get("showPrerelease", false);
 
     // Build the prerelease suffix shown alongside stable upgrades
     const preSuffix =
       showPre && upgrades.latestPrerelease
         ? ` \u03B2 ${upgrades.latestPrerelease}`
         : "";
+
+    // Usage count as separate neutral-colored decoration (after scan)
+    if (showUsage && scanDone) {
+      if (isJson) {
+        const otherCount = getOtherUsageCount(entry.packageName, currentFileUri);
+        if (otherCount > 0) {
+          decorations.usageCount.push({
+            range,
+            renderOptions: {
+              after: {
+                contentText: `+${otherCount} pkg${otherCount !== 1 ? "s" : ""}`,
+              },
+            },
+          });
+        }
+      } else {
+        const count = getUsageCount(entry.packageName);
+        decorations.usageCount.push({
+          range,
+          renderOptions: {
+            after: {
+              contentText: count === 0 ? "unused" : `${count} pkg${count !== 1 ? "s" : ""}`,
+            },
+          },
+        });
+      }
+    }
 
     if (upgrades.major) {
       decorations.major.push({
@@ -301,7 +361,6 @@ function paintResults(
         },
       });
     } else if (upgrades.prerelease) {
-      // No stable upgrade — show prerelease as the primary hint
       decorations.prerelease.push({
         range,
         renderOptions: {
@@ -309,7 +368,6 @@ function paintResults(
         },
       });
     } else if (showPre && upgrades.latestPrerelease) {
-      // Up to date on stable, but a prerelease exists
       decorations.prerelease.push({
         range,
         renderOptions: {
@@ -329,6 +387,7 @@ function paintResults(
   editor.setDecorations(errorDecType, decorations.error);
   editor.setDecorations(mismatchDecType, decorations.mismatch);
   editor.setDecorations(catalogResolvedDecType, decorations.catalogResolved);
+  editor.setDecorations(usageCountDecType, decorations.usageCount);
 }
 
 // ── Core update loop ──
@@ -353,7 +412,9 @@ async function updateDecorations(editor: vscode.TextEditor) {
   }
 
   const paintVersion = ++currentPaintVersion;
-  const workspaceRoot = path.dirname(editor.document.uri.fsPath);
+  const workspaceRoot =
+    vscode.workspace.getWorkspaceFolder(editor.document.uri)?.uri.fsPath ??
+    path.dirname(editor.document.uri.fsPath);
 
   const results = new Map<string, NpmPackageData>();
   const errors = new Map<string, string>();
@@ -375,9 +436,8 @@ async function updateDecorations(editor: vscode.TextEditor) {
 
   if (toFetch.length === 0) return;
 
-  const limit = pLimit(15);
   const promises = toFetch.map((entry) =>
-    limit(async () => {
+    fetchLimit(async () => {
       try {
         const data = await fetchPackageData(entry.packageName, workspaceRoot);
         results.set(entry.packageName, data);
@@ -474,18 +534,6 @@ class DependencyCodeActionProvider implements vscode.CodeActionProvider {
       }
       alignAction.edit = alignEdit;
       actions.push(alignAction);
-
-      // Allow this mismatch
-      const allowAction = new vscode.CodeAction(
-        `Allow version mismatch for "${entry.packageName}"`,
-        vscode.CodeActionKind.QuickFix,
-      );
-      allowAction.command = {
-        title: "Allow mismatch",
-        command: "depLens.allowMismatch",
-        arguments: [entry.packageName],
-      };
-      actions.push(allowAction);
     }
 
     // ── Cross-workspace inconsistency action ──
@@ -523,19 +571,27 @@ class DependencyCodeActionProvider implements vscode.CodeActionProvider {
           }
           action.edit = edit;
           actions.push(action);
-
-          // Allow this mismatch
-          const allowAction = new vscode.CodeAction(
-            `Allow version mismatch for "${entry.packageName}"`,
-            vscode.CodeActionKind.QuickFix,
-          );
-          allowAction.command = {
-            title: "Allow mismatch",
-            command: "depLens.allowMismatch",
-            arguments: [entry.packageName],
-          };
-          actions.push(allowAction);
         }
+      }
+    }
+
+    // ── Allow mismatch (shared for both catalog and cross-workspace) ──
+    if (actions.length > 0 && !isMismatchAllowed) {
+      const hasMismatchAction = actions.some(
+        (a) => a.kind?.contains(vscode.CodeActionKind.QuickFix) &&
+          a.title.startsWith("Switch to") || a.title.startsWith("Align to"),
+      );
+      if (hasMismatchAction) {
+        const allowAction = new vscode.CodeAction(
+          `Allow version mismatch for "${entry.packageName}"`,
+          vscode.CodeActionKind.QuickFix,
+        );
+        allowAction.command = {
+          title: "Allow mismatch",
+          command: "depLens.allowMismatch",
+          arguments: [entry.packageName],
+        };
+        actions.push(allowAction);
       }
     }
 
@@ -628,6 +684,154 @@ class DependencyCodeActionProvider implements vscode.CodeActionProvider {
   }
 }
 
+// ── Hover Provider (catalog usage info) ──
+
+class DependencyHoverProvider implements vscode.HoverProvider {
+  provideHover(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+  ): vscode.Hover | undefined {
+    if (!isSupportedFile(document)) return;
+
+    const entries = parseEntries(document);
+    const entry = entries.find((e) => e.line === position.line);
+    if (!entry) return;
+
+    const info = getPackageInfo(entry.packageName);
+    const isYaml = isPnpmWorkspaceYaml(document);
+    const isJson = isPackageJson(document);
+    const lines: string[] = [];
+    const currentFileUri = document.uri.toString();
+
+    // ── Usage info ──
+    if (info && isScanComplete()) {
+      if (isYaml) {
+        // Catalog file: show full usage list
+        const totalUsages = info.catalogUsages.length + info.usages.length;
+        lines.push(
+          `**${entry.packageName}** — ${totalUsages === 0 ? "unused in workspace" : `used in ${totalUsages} package${totalUsages !== 1 ? "s" : ""}`}`,
+        );
+        lines.push("");
+
+        for (const u of info.catalogUsages) {
+          const rel = vscode.workspace.asRelativePath(u.fileUri);
+          lines.push(`- \`${rel}\` — \`${u.ref}\``);
+        }
+        for (const u of info.usages) {
+          const rel = vscode.workspace.asRelativePath(u.fileUri);
+          const differs = info.catalogVersion && u.version !== info.catalogVersion;
+          const badge = differs ? ' <span style="color:#ff6b6b;">⚠ differs</span>' : "";
+          lines.push(`- \`${rel}\` — \`${u.version}\`${badge}`);
+        }
+
+        if (totalUsages === 0) {
+          lines.push(
+            "_No package.json in the workspace references this package._",
+          );
+        }
+      } else if (isJson) {
+        // package.json: show "also used by" (other packages, not this file)
+        lines.push(`**${entry.packageName}**`);
+
+        if (info.catalogVersion) {
+          lines.push(`\nCatalog: \`${info.catalogVersion}\``);
+        }
+
+        const others = [
+          ...info.catalogUsages.filter(
+            (u) => u.fileUri.toString() !== currentFileUri,
+          ),
+          ...info.usages.filter(
+            (u) => u.fileUri.toString() !== currentFileUri,
+          ),
+        ];
+
+        if (others.length > 0) {
+          lines.push("");
+          lines.push(
+            `**Also used by** (${others.length} other package${others.length !== 1 ? "s" : ""}):`,
+          );
+          for (const u of others) {
+            const rel = vscode.workspace.asRelativePath(u.fileUri);
+            let detail: string;
+            if ("ref" in u) {
+              detail = `\`${u.ref}\``;
+            } else {
+              const differs = info.catalogVersion && u.version !== info.catalogVersion;
+              detail = `\`${u.version}\`${differs ? ' <span style="color:#ff6b6b;">⚠ differs</span>' : ""}`;
+            }
+            lines.push(`- \`${rel}\` — ${detail}`);
+          }
+        }
+      }
+    } else {
+      lines.push(`**${entry.packageName}**`);
+    }
+
+    // ── Available upgrades (clickable) — only for direct versions, not catalog: refs ──
+    const isCatalogRef = entry.version.startsWith("catalog:");
+    const versionToCheck =
+      !isCatalogRef && isLookupableVersion(entry.version)
+        ? entry.version
+        : undefined;
+
+    if (versionToCheck) {
+      const cached = getCachedData(entry.packageName);
+      if (cached) {
+        const upgrades = computeUpgrades(versionToCheck, cached);
+        const prefix = extractPrefix(versionToCheck);
+        const upgradeLines: string[] = [];
+
+        const mkLink = (newVersion: string) => {
+          const args = encodeURIComponent(
+            JSON.stringify({
+              uri: document.uri.toString(),
+              line: entry.line,
+              oldVersion: entry.version,
+              newVersion,
+            }),
+          );
+          return `[${newVersion}](command:depLens.upgradeVersion?${args} "Click to upgrade")`;
+        };
+
+        if (upgrades.patch) {
+          upgradeLines.push(
+            `- **patch** → ${mkLink(`${prefix}${upgrades.patch}`)}`,
+          );
+        }
+        if (upgrades.minor) {
+          upgradeLines.push(
+            `- **minor** → ${mkLink(`${prefix}${upgrades.minor}`)}`,
+          );
+        }
+        if (upgrades.major) {
+          upgradeLines.push(
+            `- **latest stable** → ${mkLink(`${prefix}${upgrades.major}`)}`,
+          );
+        }
+        if (upgrades.latestPrerelease) {
+          upgradeLines.push(
+            `- **prerelease** → ${mkLink(`${prefix}${upgrades.latestPrerelease}`)}`,
+          );
+        }
+
+        if (upgradeLines.length > 0) {
+          lines.push("");
+          lines.push("**Available upgrades:**");
+          lines.push(...upgradeLines);
+        }
+      }
+    }
+
+    if (lines.length <= 1 && !info) return; // nothing useful to show
+
+    const md = new vscode.MarkdownString(lines.join("\n"));
+    md.isTrusted = true;
+    md.supportHtml = true;
+    return new vscode.Hover(md);
+  }
+}
+
 // ── Definition Provider (Ctrl+Click on catalog: refs) ──
 
 class CatalogDefinitionProvider implements vscode.DefinitionProvider {
@@ -658,6 +862,9 @@ export function activate(context: vscode.ExtensionContext) {
 
   const config = vscode.workspace.getConfiguration("depLens");
   decorationsEnabled = config.get("showDecorations", true);
+
+  // Dispose decoration types on deactivation
+  context.subscriptions.push(...ALL_DEC_TYPES);
 
   // Initialize workspace scanner — repaint active editor when scan completes
   initScanner(context, () => {
@@ -780,6 +987,27 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
+      "depLens.upgradeVersion",
+      async (args: {
+        uri: string;
+        line: number;
+        oldVersion: string;
+        newVersion: string;
+      }) => {
+        const uri = vscode.Uri.parse(args.uri);
+        const doc = await vscode.workspace.openTextDocument(uri);
+        const range = findVersionInLine(doc, args.line, args.oldVersion);
+        if (range) {
+          const edit = new vscode.WorkspaceEdit();
+          edit.replace(uri, range, args.newVersion);
+          await vscode.workspace.applyEdit(edit);
+        }
+      },
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
       "depLens.updateAll",
       async () => {
         const editor = vscode.window.activeTextEditor;
@@ -873,6 +1101,17 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   );
 
+  // Hover provider — usage info + upgrades for both file types
+  context.subscriptions.push(
+    vscode.languages.registerHoverProvider(
+      [
+        { scheme: "file", pattern: "**/pnpm-workspace.yaml" },
+        { scheme: "file", pattern: "**/package.json" },
+      ],
+      new DependencyHoverProvider(),
+    ),
+  );
+
   // Definition provider — Ctrl+Click on catalog: refs jumps to catalog
   context.subscriptions.push(
     vscode.languages.registerDefinitionProvider(
@@ -917,4 +1156,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
   clearCache();
+  lastPaintState = undefined;
+  parseCache = undefined;
+  currentPaintVersion = 0;
 }
