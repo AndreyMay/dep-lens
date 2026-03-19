@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import * as semver from "semver";
+import { parse as parseYaml } from "yaml";
 import { parseCatalogEntries } from "./yamlParser";
 import { parsePackageJsonEntries } from "./packageJsonParser";
 import { isLookupableVersion } from "./npmRegistry";
@@ -38,6 +40,8 @@ export interface CatalogEntryLocation {
 let versionMap = new Map<string, PackageInfo>();
 /** catalogSection -> packageName -> location. "catalog" = default catalog. */
 let catalogLookup = new Map<string, Map<string, CatalogEntryLocation>>();
+/** importerRelPath -> packageName -> locked version (from pnpm-lock.yaml) */
+let lockfileMap = new Map<string, Map<string, string>>();
 let diagnosticCollection: vscode.DiagnosticCollection;
 let scanInProgress = false;
 let scanQueued = false;
@@ -89,6 +93,37 @@ export function getOtherUsageCount(
       .length +
     info.usages.filter((u) => u.fileUri.toString() !== excludeUri).length
   );
+}
+
+/**
+ * Get the locked version from pnpm-lock.yaml for a package in a specific importer.
+ * @param packageJsonUri URI of the package.json file
+ * @param packageName dependency name
+ */
+export function getLockedVersion(
+  packageJsonUri: vscode.Uri,
+  packageName: string,
+): string | undefined {
+  // Compute importer path: relative dir of package.json from workspace root
+  const wsFolder = vscode.workspace.getWorkspaceFolder(packageJsonUri);
+  if (!wsFolder) return undefined;
+  const relDir = vscode.workspace.asRelativePath(packageJsonUri, false);
+  // e.g. "packages/app/package.json" -> "packages/app", "package.json" -> "."
+  const importerPath = relDir.replace(/\/package\.json$/, "") || ".";
+  const normalizedPath = importerPath === "package.json" ? "." : importerPath;
+  return lockfileMap.get(normalizedPath)?.get(packageName);
+}
+
+/**
+ * Get the locked version for a catalog entry (consistent across all importers).
+ */
+export function getCatalogLockedVersion(packageName: string): string | undefined {
+  // Find the first locked version for this package across all importers
+  for (const [, deps] of lockfileMap) {
+    const ver = deps.get(packageName);
+    if (ver) return ver;
+  }
+  return undefined;
 }
 
 /**
@@ -157,7 +192,50 @@ async function doScan() {
     }
   }
 
-  // 2. Parse all package.json files
+  // 2. Parse pnpm-lock.yaml for locked versions
+  const lockMap = new Map<string, Map<string, string>>();
+  for (const yamlUri of yamlFiles) {
+    const lockUri = vscode.Uri.joinPath(
+      yamlUri.with({ path: yamlUri.path.replace(/\/[^/]+$/, "") }),
+      "pnpm-lock.yaml",
+    );
+    try {
+      const lockText = await readFile(lockUri);
+      const lockData = parseYaml(lockText) as Record<string, any>;
+      const importers = lockData?.importers;
+      if (importers && typeof importers === "object") {
+        for (const [importerPath, importerData] of Object.entries(importers)) {
+          const deps = new Map<string, string>();
+          for (const group of [
+            "dependencies",
+            "devDependencies",
+            "optionalDependencies",
+          ]) {
+            const section = (importerData as any)?.[group];
+            if (!section || typeof section !== "object") continue;
+            for (const [name, val] of Object.entries(section)) {
+              // v9: { specifier, version }, v6: direct version string
+              const raw =
+                typeof val === "object" && val !== null
+                  ? (val as any).version
+                  : typeof val === "string"
+                    ? val
+                    : undefined;
+              if (!raw) continue;
+              // Strip peer dep suffixes: "18.3.1(@ai-sdk/...)" -> "18.3.1"
+              const cleaned = semver.coerce(raw)?.format();
+              if (cleaned) deps.set(name, cleaned);
+            }
+          }
+          if (deps.size > 0) lockMap.set(importerPath, deps);
+        }
+      }
+    } catch {
+      // lockfile doesn't exist or can't be parsed — skip
+    }
+  }
+
+  // 3. Parse all package.json files
   const excludePaths = vscode.workspace
     .getConfiguration("depLens")
     .get<string[]>("excludePaths", [
@@ -209,6 +287,7 @@ async function doScan() {
 
   versionMap = map;
   catalogLookup = lookup;
+  lockfileMap = lockMap;
   updateDiagnostics();
 }
 

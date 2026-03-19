@@ -18,6 +18,8 @@ import {
   getOtherUsageCount,
   isScanComplete,
   resolveCatalogRef,
+  getLockedVersion,
+  getCatalogLockedVersion,
 } from "./workspaceScanner";
 import { DependencyEntry, NpmPackageData } from "./types";
 
@@ -711,6 +713,12 @@ class DependencyHoverProvider implements vscode.HoverProvider {
         lines.push(
           `**${entry.packageName}** — ${totalUsages === 0 ? "unused in workspace" : `used in ${totalUsages} package${totalUsages !== 1 ? "s" : ""}`}`,
         );
+
+        const catLocked = getCatalogLockedVersion(entry.packageName);
+        if (catLocked) {
+          lines.push(`\nLocked: \`${catLocked}\``);
+        }
+
         lines.push("");
 
         for (const u of info.catalogUsages) {
@@ -735,6 +743,11 @@ class DependencyHoverProvider implements vscode.HoverProvider {
 
         if (info.catalogVersion) {
           lines.push(`\nCatalog: \`${info.catalogVersion}\``);
+        }
+
+        const locked = getLockedVersion(document.uri, entry.packageName);
+        if (locked) {
+          lines.push(`Locked: \`${locked}\``);
         }
 
         const others = [
